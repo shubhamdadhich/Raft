@@ -22,6 +22,16 @@ type ExampleReply struct {
 	Y int
 }
 
+type Task struct {
+	Assignment string
+	Id int
+	FileNames []string
+}
+
+type Convey struct {
+	Message string
+}
+
 // Add your RPC definitions here.
 
 

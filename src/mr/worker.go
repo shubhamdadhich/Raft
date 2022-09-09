@@ -36,6 +36,23 @@ func Worker(mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
+	getAssignment()
+
+}
+
+func getAssignment() {
+	task := Task{}
+	convey := Convey{}
+
+	convey.Message = "The Transfer was successful"
+
+	assignCall := call("Coordinator.AssignTask", convey, &task)
+	if assignCall {
+		fmt.Printf("Id: %v\nAssignment: %v\nFiles: %v\n", task.Id, task.Assignment, task.FileNames)
+		//performAssignment(task)
+	} else {
+		fmt.Printf("call failed!\n")
+	}
 }
 
 //
