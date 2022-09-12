@@ -62,14 +62,13 @@ func (c *Coordinator) AssignTask(convey Communicate, jobReply *JobReply) error {
 	switch convey.Id {
 	case InitiateTask:
 		{
-			/*c.cLock.Lock()
-			fmt.Println("Checking Retire")
+			c.cLock.RLock()
 			if c.retireWorkers == true {
+				c.cLock.RUnlock()
 				jobReply.IsDone = true
 				return nil
 			}
-			fmt.Println("Giving Task")
-			c.cLock.Unlock()*/
+			c.cLock.RUnlock()
 			select {
 			case file := <-c.mapChan:
 				jobReply.Task = mapMess
@@ -116,13 +115,12 @@ func (c *Coordinator) AssignTask(convey Communicate, jobReply *JobReply) error {
 func (c *Coordinator) MapJobDone(reply ReportMapJob, convey *Communicate) error {
 	fmt.Println("Job for file " + reply.InputFile + " Comleted")
 	c.cLock.Lock()
-	fmt.Println("Attaining Lock")
 	c.mapStatus[reply.InputFile] = Done
 	for i, v := range reply.IntermediateFileMap {
 		c.intermediateFiles[i] = append(c.intermediateFiles[i], v)
 	}
 	c.cLock.Unlock()
-	fmt.Println("Input File: " + reply.InputFile)
+	//fmt.Println("Input File: " + reply.InputFile)
 	return nil
 }
 
@@ -131,12 +129,12 @@ func (c *Coordinator) ReduceJobDone(reply ReportReduceJob, convey *Communicate) 
 	c.cLock.Lock()
 	c.reduceStatus[reply.ReduceNum] = Done
 	c.cLock.Unlock()
-	fmt.Println("Status Updated")
+	//fmt.Println("Status Updated")
 	return nil
 }
 
 func (c *Coordinator) TimeTicker(job string, jobFile string, redNum int) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for true {
 		select {
@@ -147,12 +145,14 @@ func (c *Coordinator) TimeTicker(job string, jobFile string, redNum int) {
 				c.mapStatus[jobFile] = Unassigned
 				c.cLock.Unlock()
 				c.mapChan <- jobFile
+				return
 			} else if job == redMess {
 				fmt.Println("Failed to get the reduce job for Red Num: " + strconv.Itoa(redNum))
 				c.cLock.Lock()
 				c.reduceStatus[redNum] = Unassigned
 				c.cLock.Unlock()
 				c.reduceChan <- redNum
+				return
 			} else {
 				fmt.Println("No valid job provided")
 				return
@@ -166,7 +166,7 @@ func (c *Coordinator) TimeTicker(job string, jobFile string, redNum int) {
 					return
 				}
 				c.cLock.RUnlock()
-				time.Sleep(time.Second)
+				//time.Sleep(time.Second)
 			case redMess:
 				c.cLock.RLock()
 				if c.reduceStatus[redNum] == Done {
@@ -174,7 +174,7 @@ func (c *Coordinator) TimeTicker(job string, jobFile string, redNum int) {
 					return
 				}
 				c.cLock.RUnlock()
-				time.Sleep(time.Second)
+				//time.Sleep(time.Second)
 			}
 		}
 	}
@@ -208,10 +208,10 @@ func (c *Coordinator) MakeJobs() {
 	for i, file := range c.givenFiles {
 		c.cLock.RLock()
 		if c.mapStatus[c.givenFiles[i]] == Unassigned {
+			c.cLock.RUnlock()
 			c.mapChan <- file
 		}
-		c.cLock.RUnlock()
-		time.Sleep(2 * time.Second)
+		//time.Sleep(2 * time.Second)
 	}
 
 	for true {
@@ -219,7 +219,6 @@ func (c *Coordinator) MakeJobs() {
 		if status {
 			break
 		}
-		time.Sleep(1 * time.Second)
 	}
 
 	fmt.Println("All Map jobs Completed")
@@ -227,10 +226,10 @@ func (c *Coordinator) MakeJobs() {
 	for i, _ := range c.intermediateFiles {
 		c.cLock.RLock()
 		if c.reduceStatus[i] == Unassigned {
+			c.cLock.RUnlock()
 			c.reduceChan <- i
 		}
-		c.cLock.RUnlock()
-		time.Sleep(2 * time.Second)
+		//time.Sleep(2 * time.Second)
 	}
 
 	for true {
@@ -238,7 +237,6 @@ func (c *Coordinator) MakeJobs() {
 		if status {
 			break
 		}
-		time.Sleep(1 * time.Second)
 	}
 
 	fmt.Println("All Reduce jobs Completed")
@@ -246,6 +244,8 @@ func (c *Coordinator) MakeJobs() {
 	c.cLock.Lock()
 	c.retireWorkers = true
 	c.cLock.Unlock()
+
+	time.Sleep(10 * time.Second)
 
 	c.cLock.Lock()
 	c.isDone = true

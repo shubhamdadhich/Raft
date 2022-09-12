@@ -10,7 +10,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	//"time"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -61,14 +61,19 @@ func getAssignment(mapf func(string, string) []KeyValue, reducef func(string, []
 		assignCall := call("Coordinator.AssignTask", convey, &job)
 		if assignCall {
 			if job.IsDone == true {
-				fmt.Println("Task Done")
-				break
+				//fmt.Println("Task Done")
+				return
+			}
+			if job.Task == "" {
+				//fmt.Println("No Job Found")
+				time.Sleep(time.Second)
+				continue
 			}
 			switch job.Task {
 			case mapMess:
-				fmt.Println("Map Task")
+				//fmt.Println("Map Task")
 				fmt.Println("Task ID: ", job.Map.MapJobNum)
-				fmt.Println("Task Input File: ", job.Map.InputFile)
+				//fmt.Println("Task Input File: ", job.Map.InputFile)
 				intermediateFileNames := performMap(job.Map, mapf)
 				reportMap := ReportMapJob{InputFile: job.Map.InputFile, IntermediateFileMap: intermediateFileNames}
 				reportMapConv := Communicate{Id: FinishMap}
@@ -76,11 +81,11 @@ func getAssignment(mapf func(string, string) []KeyValue, reducef func(string, []
 				if !reportMapCall {
 					fmt.Println("Report failed!")
 				}
-				fmt.Println("map Job for file: " + job.Map.InputFile + " Completed!")
+				//fmt.Println("map Job for file: " + job.Map.InputFile + " Completed!")
 			case redMess:
-				fmt.Println("Reduce Task")
+				//fmt.Println("Reduce Task")
 				fmt.Println("Reduce Num: ", job.Reduce.ReduceNum)
-				fmt.Println("Reduce Intermediate Files: ", job.Reduce.IntermediateFiles)
+				//fmt.Println("Reduce Intermediate Files: ", job.Reduce.IntermediateFiles)
 				redret := performReduce(job.Reduce, reducef)
 				if !redret {
 					fmt.Println("Reduce Task Failed")
