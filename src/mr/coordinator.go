@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"strconv"
+	//"strconv"
 	"sync"
 	"time"
 )
@@ -59,61 +59,56 @@ func (c *Coordinator) populateVariables(files []string, nReduce int) {
 }
 
 func (c *Coordinator) AssignTask(convey Communicate, jobReply *JobReply) error {
-	switch convey.Id {
-	case InitiateTask:
-		{
-			c.cLock.RLock()
-			if c.retireWorkers == true {
-				c.cLock.RUnlock()
-				jobReply.IsDone = true
-				return nil
-			}
-			c.cLock.RUnlock()
-			select {
-			case file := <-c.mapChan:
-				jobReply.Task = mapMess
-				c.cLock.Lock()
-				_, o := c.mapJobIdMapper[file]
-				if !o {
-					c.mapJobId += 1
-					c.mapJobIdMapper[file] = c.mapJobId
-				}
-				c.cLock.Unlock()
-				c.cLock.RLock()
-				mj := MapJob{
-					InputFile: file,
-					MapJobNum: c.mapJobIdMapper[file],
-					ReduceNum: c.coonReduce,
-				}
-				c.cLock.RUnlock()
-				jobReply.Map = mj
-				c.cLock.Lock()
-				c.mapStatus[file] = Assined
-				c.cLock.Unlock()
-				go c.TimeTicker(jobReply.Task, mj.InputFile, -1)
-				return nil
-			case reduceNum := <-c.reduceChan:
-				jobReply.Task = redMess
-				c.cLock.RLock()
-				rj := ReduceJob{
-					IntermediateFiles: c.intermediateFiles[reduceNum],
-					ReduceNum:         reduceNum,
-				}
-				c.cLock.RUnlock()
-				jobReply.Reduce = rj
-				c.cLock.Lock()
-				c.reduceStatus[reduceNum] = Assined
-				c.cLock.Unlock()
-				go c.TimeTicker(jobReply.Task, "", rj.ReduceNum)
-				return nil
-			}
+	c.cLock.RLock()
+	if c.retireWorkers == true {
+		c.cLock.RUnlock()
+		jobReply.IsDone = true
+		return nil
+	}
+	c.cLock.RUnlock()
+	select {
+	case file := <-c.mapChan:
+		jobReply.Task = mapMess
+		c.cLock.Lock()
+		_, o := c.mapJobIdMapper[file]
+		if !o {
+			c.mapJobId += 1
+			c.mapJobIdMapper[file] = c.mapJobId
 		}
+		c.cLock.Unlock()
+		c.cLock.RLock()
+		mj := MapJob{
+			InputFile: file,
+			MapJobNum: c.mapJobIdMapper[file],
+			ReduceNum: c.coonReduce,
+		}
+		c.cLock.RUnlock()
+		jobReply.Map = mj
+		c.cLock.Lock()
+		c.mapStatus[file] = Assined
+		c.cLock.Unlock()
+		go c.TimeTicker(jobReply.Task, mj.InputFile, -1)
+		return nil
+	case reduceNum := <-c.reduceChan:
+		jobReply.Task = redMess
+		c.cLock.RLock()
+		rj := ReduceJob{
+			IntermediateFiles: c.intermediateFiles[reduceNum],
+			ReduceNum:         reduceNum,
+		}
+		c.cLock.RUnlock()
+		jobReply.Reduce = rj
+		c.cLock.Lock()
+		c.reduceStatus[reduceNum] = Assined
+		c.cLock.Unlock()
+		go c.TimeTicker(jobReply.Task, "", rj.ReduceNum)
+		return nil
 	}
 	return nil
 }
 
 func (c *Coordinator) MapJobDone(reply ReportMapJob, convey *Communicate) error {
-	fmt.Println("Job for file " + reply.InputFile + " Comleted")
+	//fmt.Println("Job for file " + reply.InputFile + " Comleted")
 	c.cLock.Lock()
 	c.mapStatus[reply.InputFile] = Done
 	for i, v := range reply.IntermediateFileMap {
@@ -125,7 +120,7 @@ func (c *Coordinator) MapJobDone(reply ReportMapJob, convey *Communicate) error 
 }
 
 func (c *Coordinator) ReduceJobDone(reply ReportReduceJob, convey *Communicate) error {
-	fmt.Println("Reduce Job for ID: " + strconv.Itoa(reply.ReduceNum) + " is Completed")
+	//fmt.Println("Reduce Job for ID: " + strconv.Itoa(reply.ReduceNum) + " is Completed")
 	c.cLock.Lock()
 	c.reduceStatus[reply.ReduceNum] = Done
 	c.cLock.Unlock()
@@ -140,14 +135,14 @@ func (c *Coordinator) TimeTicker(job string, jobFile string, redNum int) {
 		select {
 		case <-ticker.C:
 			if job == mapMess {
-				fmt.Println("Failed to get the map job for File: " + jobFile)
+				//fmt.Println("Failed to get the map job for File: " + jobFile)
 				c.cLock.Lock()
 				c.mapStatus[jobFile] = Unassigned
 				c.cLock.Unlock()
 				c.mapChan <- jobFile
 				return
 			} else if job == redMess {
-				fmt.Println("Failed to get the reduce job for Red Num: " + strconv.Itoa(redNum))
+				//fmt.Println("Failed to get the reduce job for Red Num: " + strconv.Itoa(redNum))
 				c.cLock.Lock()
 				c.reduceStatus[redNum] = Unassigned
 				c.cLock.Unlock()
@@ -221,7 +216,7 @@ func (c *Coordinator) MakeJobs() {
 		}
 	}
 
-	fmt.Println("All Map jobs Completed")
+	//fmt.Println("All Map jobs Completed")
 
 	for i, _ := range c.intermediateFiles {
 		c.cLock.RLock()
@@ -239,7 +234,7 @@ func (c *Coordinator) MakeJobs() {
 		}
 	}
 
-	fmt.Println("All Reduce jobs Completed")
+	//fmt.Println("All Reduce jobs Completed")
 
 	c.cLock.Lock()
 	c.retireWorkers = true

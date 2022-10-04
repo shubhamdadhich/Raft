@@ -72,7 +72,7 @@ func getAssignment(mapf func(string, string) []KeyValue, reducef func(string, []
 			switch job.Task {
 			case mapMess:
 				//fmt.Println("Map Task")
-				fmt.Println("Task ID: ", job.Map.MapJobNum)
+				//fmt.Println("Task ID: ", job.Map.MapJobNum)
 				//fmt.Println("Task Input File: ", job.Map.InputFile)
 				intermediateFileNames := performMap(job.Map, mapf)
 				reportMap := ReportMapJob{InputFile: job.Map.InputFile, IntermediateFileMap: intermediateFileNames}
@@ -84,7 +84,7 @@ func getAssignment(mapf func(string, string) []KeyValue, reducef func(string, []
 				//fmt.Println("map Job for file: " + job.Map.InputFile + " Completed!")
 			case redMess:
 				//fmt.Println("Reduce Task")
-				fmt.Println("Reduce Num: ", job.Reduce.ReduceNum)
+				//fmt.Println("Reduce Num: ", job.Reduce.ReduceNum)
 				//fmt.Println("Reduce Intermediate Files: ", job.Reduce.IntermediateFiles)
 				redret := performReduce(job.Reduce, reducef)
 				if !redret {
