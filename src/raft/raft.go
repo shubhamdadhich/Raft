@@ -467,7 +467,7 @@ func (rf *Raft) LeaderFlow() {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.RLock.RLock()
-		Id := rf.me
+		//Id := rf.me
 		//fmt.Println("Status of " + strconv.Itoa(rf.me) + ": " + strconv.Itoa(rf.currentState))
 		rf.RLock.RUnlock()
 		rf.RLock.RLock()
