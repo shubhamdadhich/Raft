@@ -65,21 +65,29 @@ type ApplyMsg struct {
 	matchIndex    []int
 }
 
+type Entry struct {
+	Command interface{}
+	Term    int
+}
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu           sync.Mutex          // Lock to protect shared access to this peer's state
 	peers        []*labrpc.ClientEnd // RPC end points of all peers
 	persister    *Persister          // Object to hold this peer's persisted state
-	me           int                 // this peer's index into peers[]
+	me           int                 // thsis peer's index into peers[]
 	dead         int32               // set by Kill()
 	currentState int
 	RLock        *sync.RWMutex
-	currentTerm  int   // Latest Term
-	votedFor     int   // candidateId that received vote in current term
-	log          []int // log entries Command for state machine
-	commitIndex  int   // index of highest log entry known to be committed
-	lastApplied  int   // index of highest log entry applied to state machine
+	currentTerm  int     // Latest Term
+	votedFor     int     // candidateId that received vote in current term
+	log          []Entry // log entries Command for state machine
+	commitIndex  int     // index of highest log entry known to be committed
+	lastApplied  int     // index of highest log entry applied to state machine
 	heartbeat    time.Time
+	applyCh      chan ApplyMsg
+	nextIndex    []int
+	matchIndex   []int
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -92,27 +100,133 @@ func randomTime(min int, ran int) time.Duration {
 }
 
 type AppendEntriesArgs struct {
-	Term     int
-	LeaderId int
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []Entry
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
-	Term int
+	Term    int
+	Success bool
+	// ConflictIndex int
+	// ConflictTerm  int
+}
+
+func min(a int, b int) int {
+	if a <= b {
+		return a
+	}
+	return b
+}
+
+func max(a int, b int) int {
+	if a >= b {
+		return a
+	}
+	return b
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.RLock.Lock()
+	//fmt.Printf("======= Entry: server %d got AppendEntries from leader %d, args: %+v, current log: %v, reply: %+v =======\n", rf.me, args.LeaderId, args, rf.log, reply)
 	if rf.currentTerm <= args.Term {
+		//rf.RLock.Lock()
+		rf.heartbeat = time.Now()
 		reply.Term = args.Term
+		rf.currentTerm = args.Term
+		reply.Success = false
+		// reply.ConflictIndex = -1
+		// reply.ConflictTerm = -1
 		//fmt.Println(strconv.Itoa(rf.me) + " : Setting Follower")
 		rf.currentState = Follower
-		rf.currentTerm = reply.Term
+		//rf.RLock.Unlock()
+		if (len(rf.log) - 1) < args.PrevLogIndex {
+			//fmt.Println(strconv.Itoa(rf.me) + " : Exiting due to conflict")
+			//reply.ConflictIndex = len(rf.log)
+			rf.RLock.Unlock()
+			return
+		} else {
+			reply.Term = args.Term
+			//rf.RLock.Lock()
+			//rf.RLock.Unlock()
+			if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+				// reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
+				// for i := 0; i < args.PrevLogIndex; i++ {
+				// 	if rf.log[i].Term == reply.ConflictTerm {
+				// 		reply.ConflictIndex = i
+				// 		break
+				// 	}
+				// }
+				// return
+				//fmt.Printf("%v: Prev Terms Conflicting: rfPrev, argPrev: [%v, %v]\n", rf.me, rf.log[args.PrevLogIndex].Term, args.PrevLogTerm)
+				//fmt.Printf("%v: AE : Conflict Logs Truncating : Logs: %v\n", rf.me, rf.log)
+				rf.log = rf.log[:args.PrevLogIndex]
+				//fmt.Printf("%v: AE : Conflict Truncated Logs : %v\n", rf.me, rf.log)
+				rf.RLock.Unlock()
+				return
+			}
+
+			// Truncating if existing entries do not match with the new ones
+			index := args.PrevLogIndex + 1
+			i := 0
+			for ; i < len(args.Entries); i++ {
+				index = index + i
+				if index >= len(rf.log)-1 {
+					break
+				}
+				if rf.log[index].Term != args.Entries[i].Term {
+					//rf.RLock.Lock()
+					//rf.RLock.Unlock()
+					break
+				}
+			}
+			//fmt.Printf("%v: AE : Logs Truncating : Logs: %v\n", rf.me, rf.log)
+			rf.log = rf.log[:index]
+			//fmt.Printf("%v: AE Truncating till: %v\n", rf.me, index)
+			args.Entries = args.Entries[i:]
+			//fmt.Printf("%v: AE : Logs : %v\n", rf.me, rf.log)
+			rf.log = append(rf.log, args.Entries...)
+
+			// for i := 0; i < len(args.Entries); i++ {
+			// 	index := args.PrevLogIndex + 1 + i
+			// 	if len(rf.log)-1 >= index {
+			// 		if rf.log[index].Term == args.Entries[i].Term {
+			// 			continue
+			// 		}
+			// 	}
+
+			// 	//rf.RLock.Lock()
+			// 	//fmt.Println(strconv.Itoa(rf.me) + ": AE : Logs Appended")
+			// 	//fmt.Printf("%v: AE : Logs: %v\n", rf.me, rf.log)
+			// 	//rf.RLock.Unlock()
+			// }
+
+			reply.Success = true
+
+			//fmt.Printf("%v: AE : LeaderCommit, CommitIndex: [%v, %v]", rf.me, args.LeaderCommit, rf.commitIndex)
+			if args.LeaderCommit > rf.commitIndex {
+				//rf.RLock.Lock()
+				rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
+				//rf.RLock.Unlock()
+			}
+			if rf.commitIndex > rf.lastApplied {
+				//rf.RLock.Lock()
+				//fmt.Printf("%v: AE : Committing Till : %v\n", rf.me, rf.commitIndex)
+				rf.applyOnChan()
+				//rf.RLock.Unlock()
+			}
+		}
 		rf.heartbeat = time.Now()
-		rf.RLock.Unlock()
-	} else {
-		reply.Term = rf.currentTerm
-		rf.RLock.Unlock()
 	}
+	if !reply.Success {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+	}
+	//fmt.Printf("======= Exit: server  %d got AppendEntries from leader %d, args: %+v, current log: %v, reply: %+v =======\n", rf.me, args.LeaderId, args, rf.log, reply)
+	rf.RLock.Unlock()
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -195,8 +309,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
-	Term        int
-	CandidateId int
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 	// Your data here (2A, 2B).
 }
 
@@ -214,18 +330,31 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.RLock.Lock()
 	defer rf.RLock.Unlock()
 	//time.Sleep(wtime)
-	//fmt.Println(strconv.Itoa(rf.me) + " " + strconv.Itoa(args.CandidateId) + " -> " + strconv.Itoa(args.Term) + " " + strconv.Itoa(rf.currentTerm) + " # " + strconv.Itoa(rf.votedFor))
-	if ((rf.currentTerm == args.Term) && (rf.votedFor == -1)) || (args.Term > rf.currentTerm) {
-		//fmt.Println("========" + strconv.Itoa(rf.me) + " Granting Vote ============> " + strconv.Itoa(args.CandidateId))
-		reply.VoteGranted = true
-		reply.Term = args.Term
-		rf.currentState = Follower
-		rf.currentTerm = args.Term
-		rf.votedFor = args.CandidateId
-		rf.heartbeat = time.Now()
-	} else if rf.currentTerm > args.Term {
+	//fmt.Println("Req: " + strconv.Itoa(args.CandidateId) + " T: " + strconv.Itoa(args.Term) + " -> Rec: " + strconv.Itoa(rf.me) + " T: " + strconv.Itoa(rf.currentTerm) + " #V " + strconv.Itoa(rf.votedFor))
+	//fmt.Printf("Args: %v\n", args)
+
+	if rf.currentTerm > args.Term {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
+		return
+	}
+
+	if args.Term > rf.currentState {
+		rf.currentState = Follower
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+	}
+
+	reply.Term = rf.currentTerm
+
+	reply.VoteGranted = false
+
+	lastIndex := len(rf.log) - 1
+	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && ((lastIndex <= args.LastLogIndex && rf.log[lastIndex].Term == args.LastLogTerm) || (rf.log[lastIndex].Term < args.LastLogTerm)) {
+		//fmt.Println("========" + strconv.Itoa(rf.me) + " Granting Vote ============> " + strconv.Itoa(args.CandidateId))
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateId
+		rf.heartbeat = time.Now()
 	}
 	//time.Sleep(wtime)
 	// Your code here (2A, 2B).
@@ -280,8 +409,27 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := -1
 	isLeader := true
 
-	// Your code here (2B).
+	rf.RLock.Lock()
+	//fmt.Println(strconv.Itoa(rf.me) + ": Got Start Entry")
+	isLeader = rf.currentState == Leader
+	if !isLeader {
+		//fmt.Println(strconv.Itoa(rf.me) + ": Start Returning No Leader")
+		rf.RLock.Unlock()
+		return index, term, isLeader
+	}
 
+	term = rf.currentTerm
+	entry := Entry{
+		Command: command,
+		Term:    term,
+	}
+	rf.log = append(rf.log, entry)
+	index = len(rf.log) - 1
+	//fmt.Println(strconv.Itoa(rf.me) + ": Start Returning Leader")
+	rf.RLock.Unlock()
+
+	// Your code here (2B).
+	//fmt.Println("Returning Start")
 	return index, term, isLeader
 }
 
@@ -312,16 +460,20 @@ func (rf *Raft) FollowerFlow() {
 	time.Sleep(tOut)
 
 	//fmt.Println("waking up")
-	////fmt.Println("Time Returned " + strconv.Itoa(rf.me))
 	rf.RLock.RLock()
+	//fmt.Println("Time Returned " + strconv.Itoa(rf.me))
 	if time.Now().Sub(rf.heartbeat).Milliseconds() >= tOut.Milliseconds() {
 		//fmt.Printf("%v is converting to candidate\n", rf.me)
+		if (len(rf.log) - 1) >= 0 {
+			//fmt.Println(strconv.Itoa(rf.me) + ": Follower Last Log [Index, Term]: [" + strconv.Itoa(len(rf.log)-1) + "," + strconv.Itoa(rf.log[len(rf.log)-1].Term) + "]")
+		}
 		rf.RLock.RUnlock()
-		////fmt.Println("Loop")
+		//fmt.Println("Loop")
 		rf.RLock.Lock()
 		rf.currentState = Candidate
 		rf.votedFor = -1
 		rf.RLock.Unlock()
+		//fmt.Println(strconv.Itoa(rf.me) + ": Returning")
 		return
 	} else {
 		//fmt.Printf("%v may have just received heartbeat\n", rf.me)
@@ -331,6 +483,9 @@ func (rf *Raft) FollowerFlow() {
 }
 
 func (rf *Raft) CandidateFlow() {
+	rf.RLock.RLock()
+	//fmt.Println(strconv.Itoa(rf.me) + ": Candidate Flow")
+	rf.RLock.RUnlock()
 	tOut := randomTime(minTimeDur, randTimeDur)
 	Votes := 0
 	CompletedVoting := 0
@@ -362,6 +517,10 @@ func (rf *Raft) CandidateFlow() {
 				rf.RLock.Lock()
 				arg.CandidateId = rf.me
 				arg.Term = rf.currentTerm
+				lastLogIndex := len(rf.log) - 1
+				arg.LastLogIndex = lastLogIndex
+				arg.LastLogTerm = rf.log[arg.LastLogIndex].Term
+
 				rf.RLock.Unlock()
 				reply := RequestVoteReply{}
 				out := rf.sendRequestVote(server, arg, &reply)
@@ -394,8 +553,9 @@ func (rf *Raft) CandidateFlow() {
 	//fmt.Println(strconv.Itoa(rf.me) + ": Pt4 Checked")
 	rf.RLock.RUnlock()
 	for {
-		//fmt.Println(strconv.Itoa(rf.me) + ": Pt4.1 Reached")
+		time.Sleep(20 * time.Millisecond)
 		rf.RLock.RLock()
+		//fmt.Println(strconv.Itoa(rf.me) + ": Pt4.1 Reached")
 		//fmt.Println(strconv.Itoa(rf.me) + ": Pt4.1 Checked")
 		if Votes >= Consensus || CompletedVoting == NetworkLen || time.Now().Sub(electionTime).Milliseconds() >= tOut.Milliseconds() {
 			rf.RLock.RUnlock()
@@ -411,13 +571,15 @@ func (rf *Raft) CandidateFlow() {
 	rf.RLock.RUnlock()
 	rf.RLock.RLock()
 	if Votes >= Consensus {
-		rf.RLock.RUnlock()
-		rf.RLock.RLock()
 		//fmt.Println(strconv.Itoa(rf.me) + ": Pt6 Out")
 		rf.RLock.RUnlock()
 		rf.RLock.Lock()
 		rf.currentState = Leader
-		rf.currentTerm += 1
+		lastLogIndex := len(rf.log) - 1
+		for peer := range rf.peers {
+			rf.nextIndex[peer] = lastLogIndex + 1
+			rf.matchIndex[peer] = 0
+		}
 		rf.RLock.Unlock()
 		//fmt.Println(strconv.Itoa(rf.me) + ": Pt7 Out")
 		return
@@ -427,39 +589,150 @@ func (rf *Raft) CandidateFlow() {
 	return
 }
 
+func (rf *Raft) applyOnChan() {
+	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+		//fmt.Printf("%v: Commtted: %v\n", rf.me, rf.log[i])
+		rf.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.log[i].Command,
+			CommandIndex: i,
+		}
+		rf.lastApplied = i
+	}
+}
+
 func (rf *Raft) LeaderFlow() {
 	rf.RLock.RLock()
+	//fmt.Printf("%v: Leader Logs: %v\n", rf.me, rf.log)
+	//if (len(rf.log) - 1) >= 0 {
+	//fmt.Println(strconv.Itoa(rf.me) + ": Leader Last Log [Index, Term]: [" + strconv.Itoa(len(rf.log)-1) + "," + strconv.Itoa(rf.log[len(rf.log)-1].Term) + "]")
+	//}
 	//fmt.Println(strconv.Itoa(rf.me) + ": Sending Entries")
+	peers := rf.peers
 	rf.RLock.RUnlock()
-	term, leader := rf.GetState()
-	arg := AppendEntriesArgs{}
-	arg.LeaderId = rf.me
-	arg.Term = term
-	if leader {
-		rf.RLock.RLock()
-		for follower := range rf.peers {
-			if follower == arg.LeaderId {
-				continue
-			} else {
-				go func(follower int) {
-					reply := AppendEntriesReply{}
-					out := rf.sendAppendEntries(follower, &arg, &reply)
-					if !out {
-						return
-					}
-					if reply.Term > term {
-						rf.RLock.Lock()
-						//fmt.Println(strconv.Itoa(rf.me) + ": Stepping Down as Leader: ")
-						rf.currentState = Follower
-						rf.currentTerm = reply.Term
-						rf.RLock.Unlock()
-					}
-				}(follower)
-			}
-			time.Sleep(50 * time.Microsecond)
+
+	//fmt.Println(strconv.Itoa(rf.me) + ": Semding RPC Entries Now")
+
+	rf.RLock.RLock()
+	for follower := range rf.peers {
+		if follower == 0 {
+			rf.RLock.RUnlock()
 		}
-		rf.RLock.RUnlock()
+		if follower == rf.me {
+			continue
+		} else {
+			go func(follower int) {
+				//fmt.Println(strconv.Itoa(rf.me) + ": Sending RPC: " + strconv.Itoa(follower))
+				rf.RLock.RLock()
+				arg := AppendEntriesArgs{}
+				arg.LeaderId = rf.me
+				arg.Term = rf.currentTerm
+				//fmt.Printf("%v: %v: nextIndex: %v\n", rf.me, follower, rf.nextIndex)
+				prevLogIndex := rf.nextIndex[follower] - 1
+				arg.PrevLogIndex = prevLogIndex
+				arg.PrevLogTerm = rf.log[arg.PrevLogIndex].Term
+				arg.Entries = append([]Entry{}, rf.log[rf.nextIndex[follower]:]...)
+				//fmt.Printf("%v, %v: LeaderCommit : commitIndex: %v\n", rf.me, follower, rf.commitIndex)
+				arg.LeaderCommit = rf.commitIndex
+				reply := AppendEntriesReply{}
+				//fmt.Println(strconv.Itoa(rf.me) + ": RPC Variables Populates: [" + strconv.Itoa(arg.Term) + "," + strconv.Itoa(arg.PrevLogIndex) + "," + strconv.Itoa(arg.PrevLogTerm) + "] to : " + strconv.Itoa(follower))
+				//fmt.Printf("%v, %v: Entries: %v\n", rf.me, follower, arg.Entries)
+				rf.RLock.RUnlock()
+				out := rf.sendAppendEntries(follower, &arg, &reply)
+				rf.RLock.RLock()
+				//fmt.Println(strconv.Itoa(rf.me) + ": RPC Recieved Reply: " + strconv.Itoa(follower))
+				rf.RLock.RUnlock()
+				if !out {
+					rf.RLock.RLock()
+					//fmt.Println(strconv.Itoa(rf.me) + ": RPC Empty Reply: " + strconv.Itoa(follower))
+					rf.RLock.RUnlock()
+					return
+				}
+				time.Sleep(20 * time.Microsecond)
+				rf.RLock.RLock()
+				if reply.Term > rf.currentTerm {
+					rf.RLock.RUnlock()
+					rf.RLock.Lock()
+					//fmt.Println(strconv.Itoa(rf.me) + ": Stepping Down as Leader")
+					rf.currentState = Follower
+					rf.currentTerm = reply.Term
+					rf.RLock.Unlock()
+				} else if rf.currentState != Leader {
+					//fmt.Println(strconv.Itoa(rf.me) + ": Not a Leader anymore")
+					rf.RLock.RUnlock()
+				} else if reply.Success {
+					//fmt.Println(strconv.Itoa(rf.me) + ": RPC Incrementing Indices: " + strconv.Itoa(follower))
+					rf.RLock.RUnlock()
+					rf.RLock.Lock()
+					matchIndex := prevLogIndex + len(arg.Entries)
+					if matchIndex > rf.matchIndex[follower] {
+						rf.matchIndex[follower] = prevLogIndex + len(arg.Entries)
+					}
+					rf.nextIndex[follower] = rf.matchIndex[follower] + 1
+					//fmt.Printf("%v: matchIndex: %v\n", rf.me, rf.matchIndex)
+					//fmt.Printf("%v: nextIndex: %v\n", rf.me, rf.nextIndex)
+					rf.RLock.Unlock()
+				} else if !reply.Success {
+					//fmt.Println(strconv.Itoa(rf.me) + ": RPC Reducing nextIndex: " + strconv.Itoa(follower))
+					rf.RLock.RUnlock()
+					rf.RLock.Lock()
+					rf.nextIndex[follower] = rf.nextIndex[follower] - 1
+					rf.matchIndex[follower] = rf.nextIndex[follower] - 1
+					rf.RLock.Unlock()
+					// rf.RLock.Lock()
+					// if reply.ConflictIndex < 0 {
+					// 	rf.nextIndex[follower] = rf.nextIndex[follower] - 1
+					// 	rf.matchIndex[follower] = rf.nextIndex[follower] - 1
+					// } else {
+					// 	index := -1
+					// 	for i := len(rf.log) - 1; i >= 0; i-- {
+					// 		if rf.log[i].Term == reply.ConflictTerm {
+					// 			break
+					// 		}
+					// 	}
+
+					// 	if index < 0 {
+					// 		rf.nextIndex[follower] = rf.currentTerm
+					// 	} else {
+					// 		rf.nextIndex[follower] = index
+					// 	}
+					// 	rf.matchIndex[follower] = rf.nextIndex[follower] - 1
+					// }
+					// rf.RLock.Unlock()
+				} else {
+					//fmt.Println(strconv.Itoa(rf.me) + ": Just Unlocking: " + strconv.Itoa(follower))
+					rf.RLock.RUnlock()
+				}
+				rf.RLock.RLock()
+				//fmt.Println(strconv.Itoa(rf.me) + ": Returning RPC: " + strconv.Itoa(follower))
+				rf.RLock.RUnlock()
+			}(follower)
+		}
+		time.Sleep(50 * time.Microsecond)
 	}
+
+	rf.RLock.Lock()
+	//fmt.Println(strconv.Itoa(rf.me) + ": Checking Commit Entries")
+	//fmt.Println(strconv.Itoa(rf.me) + ": Commit Entry, Log Length: " + strconv.Itoa(rf.commitIndex) + ", " + strconv.Itoa(len(rf.log)))
+
+	for n := rf.commitIndex; n <= len(rf.log)-1; n++ {
+		count := 1
+		if rf.currentTerm == rf.log[n].Term {
+			for i := 0; i < len(peers); i++ {
+				if i != rf.me && rf.matchIndex[i] >= n {
+					count++
+				}
+			}
+		}
+
+		if count > len(peers)/2 && rf.currentState == Leader {
+			//fmt.Printf("%v, Committing Entry at index: %v\n", rf.me, n)
+			rf.commitIndex = n
+			//fmt.Printf("%v, CommitIndex: %v\n", rf.me, rf.commitIndex)
+			rf.applyOnChan()
+		}
+	}
+	rf.RLock.Unlock()
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -467,7 +740,7 @@ func (rf *Raft) LeaderFlow() {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.RLock.RLock()
-		//Id := rf.me
+		// Id := rf.me
 		//fmt.Println("Status of " + strconv.Itoa(rf.me) + ": " + strconv.Itoa(rf.currentState))
 		rf.RLock.RUnlock()
 		rf.RLock.RLock()
@@ -503,6 +776,7 @@ func (rf *Raft) initailizeRaft(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = applyCh
 	rf.currentState = Follower
 	rf.currentTerm = 0
 	rf.votedFor = -1
@@ -510,6 +784,9 @@ func (rf *Raft) initailizeRaft(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.heartbeat = time.Now()
 	rf.RLock = new(sync.RWMutex)
+	rf.log = make([]Entry, 0)
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -525,6 +802,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.initailizeRaft(peers, me, persister, applyCh)
+	rf.log = append(rf.log, Entry{Term: 0, Command: nil})
 	//fmt.Println("Starting Raft " + strconv.Itoa(me))
 
 	// Your initialization code here (2A, 2B, 2C).
